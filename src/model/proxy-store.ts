@@ -7,7 +7,7 @@ import {
     observe,
     runInAction,
 } from 'mobx';
-import { getLocal, Mockttp, ProxyConfig } from 'mockttp';
+import { getRemote, Mockttp, ProxyConfig } from 'mockttp';
 
 import {
     PortRange,
@@ -25,7 +25,6 @@ import { lazyObservablePromise } from '../util/observable';
 import { persist, hydrate } from '../util/mobx-persist/persist';
 import { isValidPort } from './network';
 import { serverVersion } from '../services/service-versions';
-import { reportError } from '../errors';
 
 // Start the server, with slowly decreasing retry frequency (up to a limit).
 // Note that this never fails - any timeout to this process needs to happen elsewhere.
@@ -86,6 +85,9 @@ export class ProxyStore {
     systemProxyConfig: ProxyConfig | undefined;
 
     @observable
+    dnsServers: string[] = [];
+
+    @observable
     serverVersion!: string; // Definitely set *after* initialization
 
     readonly initialized = lazyObservablePromise(async () => {
@@ -137,7 +139,7 @@ export class ProxyStore {
     }
 
     private startIntercepting = flow(function* (this: ProxyStore) {
-        this.server = getLocal({
+        this.server = getRemote({
             cors: false,
             suggestChanges: false,
             standaloneServerUrl: 'http://127.0.0.1:45456',
@@ -150,12 +152,13 @@ export class ProxyStore {
         announceServerReady();
         console.log('Server started');
 
-        yield getConfig().then((config) => {
+        yield getConfig(this.serverPort).then((config) => {
             this.certPath = config.certificatePath;
             this.certContent = config.certificateContent;
             this.certFingerprint = config.certificateFingerprint;
             this.setNetworkAddresses(config.networkInterfaces);
             this.systemProxyConfig = config.systemProxy;
+            this.dnsServers = config.dnsServers;
             console.log('Config loaded');
         });
 
@@ -218,6 +221,7 @@ export class ProxyStore {
             return addresses
                 .filter(a =>
                     !a.internal && // Loopback interfaces
+                    a.family === "IPv4" && // Android VPN app supports IPv4 only
                     iface !== 'docker0' && // Docker default bridge interface
                     !iface.startsWith('br-') && // More docker bridge interfaces
                     !iface.startsWith('veth') // Virtual interfaces for each docker container

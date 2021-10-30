@@ -4,6 +4,7 @@ import { observable, action } from 'mobx';
 
 import { styled } from '../styles';
 import { Sentry, isSentryInitialized } from '../errors';
+import { trackEvent } from '../tracking';
 
 const ErrorOverlay = styled((props: {
     className?: string,
@@ -81,6 +82,11 @@ export class ErrorBoundary extends React.Component {
                 scope.setExtra(key, errorInfo[key]);
             });
             Sentry.captureException(error);
+        });
+
+        trackEvent({
+            category: 'Error',
+            action: 'UI crashed'
         });
     }
 

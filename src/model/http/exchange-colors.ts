@@ -23,6 +23,7 @@ const isMutatativeExchange = (exchange: HttpExchange) => _.includes([
 
 const isImageExchange = (exchange: SuccessfulExchange) =>
     getMessageBaseAcceptTypes(exchange.request).every(type => type.startsWith('image/')) ||
+    exchange.request.headers['sec-fetch-dest'] === 'image' ||
     getMessageBaseContentType(exchange.response).startsWith('image/');
 
 const DATA_CONTENT_TYPES = [
@@ -41,6 +42,7 @@ const isDataExchange = (exchange: SuccessfulExchange) =>
     _.includes(DATA_CONTENT_TYPES, getMessageBaseContentType(exchange.response));
 
 const isJSExchange = (exchange: SuccessfulExchange) =>
+    exchange.request.headers['sec-fetch-dest'] === 'script' ||
     _.includes([
         'text/javascript',
         'application/javascript',
@@ -49,14 +51,17 @@ const isJSExchange = (exchange: SuccessfulExchange) =>
     ], getMessageBaseContentType(exchange.response));
 
 const isCSSExchange = (exchange: SuccessfulExchange) =>
+    exchange.request.headers['sec-fetch-dest'] === 'style' ||
     _.includes([
         'text/css'
     ], getMessageBaseContentType(exchange.response));
 
 const isHTMLExchange = (exchange: SuccessfulExchange) =>
+    exchange.request.headers['sec-fetch-dest'] === 'document' ||
     getMessageBaseContentType(exchange.response) === 'text/html';
 
 const isFontExchange = (exchange: SuccessfulExchange) =>
+    exchange.request.headers['sec-fetch-dest'] === 'font' ||
     getMessageBaseContentType(exchange.response).startsWith('font/') ||
     _.includes([
         'application/font-woff',
@@ -69,10 +74,24 @@ const isFontExchange = (exchange: SuccessfulExchange) =>
         'application/x-font-opentype',
     ], getMessageBaseContentType(exchange.response));
 
-export function getExchangeCategory(exchange: HttpExchange) {
+export const ExchangeCategories = [
+    'image',
+    'js',
+    'css',
+    'html',
+    'font',
+    'data',
+    'mutative',
+    'incomplete',
+    'aborted',
+    'unknown'
+] as const;
+export type ExchangeCategory = typeof ExchangeCategories[number];
+
+export function getExchangeCategory(exchange: HttpExchange): ExchangeCategory {
     if (!exchange.isCompletedExchange()) {
         if (isMutatativeExchange(exchange)) {
-            return 'mutative'; // red
+            return 'mutative';
         } else {
             return 'incomplete';
         }
@@ -96,8 +115,6 @@ export function getExchangeCategory(exchange: HttpExchange) {
         return 'unknown';
     }
 };
-
-export type ExchangeCategory = ReturnType<typeof getExchangeCategory>;
 
 export function describeExchangeCategory(category: ExchangeCategory) {
     const categoryColour = getExchangeSummaryColour(category);

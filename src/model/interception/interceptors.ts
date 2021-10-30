@@ -1,7 +1,11 @@
 import * as _ from "lodash";
 
 import { ServerInterceptor } from "../../services/server-api";
-import { versionSatisfies, DETAILED_CONFIG_RANGE } from "../../services/service-versions";
+import {
+    versionSatisfies,
+    DETAILED_CONFIG_RANGE,
+    DOCKER_INTERCEPTION_RANGE
+} from "../../services/service-versions";
 import { IconProps, SourceIcons } from "../../icons";
 import { AccountStore } from "../account/account-store";
 
@@ -13,6 +17,7 @@ import { AndroidDeviceCustomUi } from "../../components/intercept/config/android
 import { AndroidAdbCustomUi } from "../../components/intercept/config/android-adb-config";
 import { ExistingBrowserCustomUi } from "../../components/intercept/config/existing-browser-config";
 import { JvmCustomUi } from "../../components/intercept/config/jvm-config";
+import { DockerAttachCustomUi } from "../../components/intercept/config/docker-attach-config";
 
 interface InterceptorConfig {
     name: string;
@@ -27,12 +32,13 @@ interface InterceptorConfig {
         serverVersion?: string
     }) => boolean;
     uiConfig?: InterceptorCustomUiConfig;
+    getActivationOptions?: (options: { accountStore: AccountStore }) => unknown;
 }
 
 export type Interceptor =
     Pick<ServerInterceptor, Exclude<keyof ServerInterceptor, 'version'>> &
     InterceptorConfig &
-    { version?: string, isSupported: boolean };
+    { version?: string, isSupported: boolean, activationOptions: unknown | undefined };
 
 const BROWSER_TAGS = ['browsers', 'web', 'pwa'];
 const JVM_TAGS = ['jvm', 'java', 'scala', 'kotlin', 'clojure', 'groovy'];
@@ -51,6 +57,17 @@ const recoloured = (icon: IconProps, color: string) => ({ ...icon, color });
 export const MANUAL_INTERCEPT_ID = 'manual-setup';
 
 const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
+    'docker-attach': {
+        name: 'Attach to Docker Container',
+        description: ["Intercept all traffic from running Docker containers"],
+        uiConfig: DockerAttachCustomUi,
+        iconProps: SourceIcons.Docker,
+        checkRequirements: ({ accountStore, serverVersion }) => {
+            return accountStore.featureFlags.includes('docker') &&
+                versionSatisfies(serverVersion || '', DOCKER_INTERCEPTION_RANGE);
+        },
+        tags: DOCKER_TAGS
+    },
     'fresh-chrome': {
         name: 'Chrome',
         description: ["Intercept a fresh independent Chrome window"],
@@ -154,18 +171,6 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
             return versionSatisfies(interceptorVersion, "^1.0.3")
         },
     },
-    'docker-all': {
-        name: 'All Docker Containers',
-        description: ["Intercept all local Docker traffic"],
-        iconProps: SourceIcons.Docker,
-        tags: DOCKER_TAGS
-    },
-    'docker-specific': {
-        name: 'Specific Docker Containers',
-        description: ["Intercept all traffic from specific Docker containers"],
-        iconProps: SourceIcons.Docker,
-        tags: DOCKER_TAGS
-    },
     'attach-jvm': {
         name: 'Attach to JVM',
         description: [
@@ -179,7 +184,11 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
         name: 'Fresh Terminal',
         description: ["Open a new terminal preconfigured to intercept all launched processes"],
         iconProps: SourceIcons.Terminal,
-        tags: TERMINAL_TAGS
+        tags: TERMINAL_TAGS,
+        getActivationOptions: ({ accountStore }) =>
+            accountStore.featureFlags.includes('docker')
+            ? { dockerEnabled: true }
+            : {}
     },
     'existing-terminal': {
         name: 'Existing Terminal',
@@ -195,7 +204,7 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
             'Automatically injects system HTTPS certificates into rooted devices & most emulators'
         ],
         iconProps: androidInterceptIconProps,
-        checkRequirements: ({ accountStore, serverVersion }) => {
+        checkRequirements: ({ serverVersion }) => {
             return versionSatisfies(serverVersion || '', DETAILED_CONFIG_RANGE);
         },
         uiConfig: AndroidAdbCustomUi,
@@ -208,7 +217,7 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
             'Manual setup required for HTTPS in some apps'
         ],
         iconProps: recoloured(androidInterceptIconProps, '#4285F4'),
-        checkRequirements: ({ accountStore, serverVersion }) => {
+        checkRequirements: ({ serverVersion }) => {
             return versionSatisfies(serverVersion || '', DETAILED_CONFIG_RANGE);
         },
         clientOnly: true,
@@ -283,7 +292,8 @@ export function getInterceptOptions(
                 id: id,
                 isSupported: false,
                 isActive: false,
-                isActivable: false
+                isActivable: false,
+                activationOptions: undefined
             });
         } else if (option.clientOnly) {
             // Some interceptors don't need server support at all, so as long as the requirements
@@ -292,7 +302,10 @@ export function getInterceptOptions(
                 id: id,
                 isSupported: true,
                 isActive: false,
-                isActivable: true
+                isActivable: true,
+                activationOptions: option.getActivationOptions
+                    ? option.getActivationOptions({ accountStore })
+                    : undefined
             });
         } else {
             // For everything else: the UI & server supports this, we let the server tell us
@@ -301,7 +314,10 @@ export function getInterceptOptions(
 
             return _.assign({}, option, serverInterceptor, {
                 id,
-                isSupported: true
+                isSupported: true,
+                activationOptions: option.getActivationOptions
+                    ? option.getActivationOptions({ accountStore })
+                    : undefined
             });
         }
     });
