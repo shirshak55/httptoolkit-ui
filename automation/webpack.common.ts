@@ -4,9 +4,8 @@ import * as Webpack from 'webpack';
 import HtmlWebpackPlugin from 'html-webpack-plugin';
 import GoogleFontsPlugin from 'google-fonts-plugin';
 import CopyPlugin from 'copy-webpack-plugin';
-
-import { InjectManifest } from 'workbox-webpack-plugin';
-import * as ssri from "ssri";
+import ForkTsCheckerWebpackPlugin from 'fork-ts-checker-webpack-plugin';
+import ForkTsCheckerNotifierWebpackPlugin from 'fork-ts-checker-notifier-webpack-plugin';
 
 // Webpack (but not tsc) gets upset about this, so let's opt out
 // of proper typing entirely.
@@ -31,10 +30,43 @@ export default <Webpack.Configuration>{
         extensions: ['.js', '.ts', '.tsx']
     },
 
+    stats: {
+        assets: false,
+        children: false,
+        chunks: false,
+        entrypoints: false,
+        modules: false
+    },
+
+    performance: {
+        hints: false
+    },
+
     module: {
         rules: [{
             test: /\.tsx?$/,
-            use: [{ loader: 'awesome-typescript-loader' }],
+            use: [
+                { loader: 'cache-loader' },
+                {
+                    loader: 'thread-loader',
+                    options: {
+                        // Leave 1 cpu for the fork-ts-checker-webpack-plugin
+                        workers: require('os').cpus().length - 1,
+
+                        // Only use threads for the initial build. Most incremental
+                        // builds don't want threads (because they're compiling only one file)
+                        poolRespawn: false
+                    },
+                },
+                {
+                    loader: 'ts-loader',
+                    options: {
+                        // Note that this disables all checking - that's handled entirely by
+                        // ForkTsCheckerWebpackPlugin.
+                        happyPackMode: true
+                    }
+                }
+            ],
             exclude: /node_modules/
         }, {
             test: /\.(woff2|ttf|png|svg)$/,
@@ -59,6 +91,17 @@ export default <Webpack.Configuration>{
     },
 
     plugins: [
+        new ForkTsCheckerWebpackPlugin({
+            // We need to enable all checks, because happyPackMode for ts-loader (required to use
+            // threads) disables 100% of checking, even for syntax errors.
+            typescript: {
+                diagnosticOptions: {
+                    semantic: true,
+                    syntactic: true
+                }
+            }
+        }),
+        new ForkTsCheckerNotifierWebpackPlugin(),
         new Webpack.IgnorePlugin(
             // Fallback, only used in wasm isn't supported. We just don't support zstd
             // if wasm isn't supported (i.e. if loaded custom in old old browsers).
@@ -111,33 +154,6 @@ export default <Webpack.Configuration>{
             'SENTRY_DSN': null,
             'GA_ID': null,
             'UI_VERSION': null
-        }),
-        new InjectManifest({
-            swSrc: path.join(SRC_DIR, 'services', 'update-worker.ts'),
-            exclude: ['google-fonts', /^api\//, 'update-worker.js', /.map$/],
-            maximumFileSizeToCacheInBytes: 100 * 1024 * 1024,
-            manifestTransforms: [
-                (originalManifest: any, compilation: any) => {
-                    // Add integrity info to every file, to ensure the cache can't be
-                    // corrupted. We have seen this in practice, I think due to AWS outage
-                    // issues? This helps protect against possible corruptions:
-                    const manifest = originalManifest.map((entry: any) => {
-                        const asset = compilation.getAsset(entry.url);
-                        const assetSource = asset.source.source();
-                        entry.integrity = ssri.fromData(
-                            assetSource instanceof ArrayBuffer
-                                ? Buffer.from(assetSource) // Wasm!
-                                : assetSource
-                        ).toString();
-                        return entry;
-                    });
-
-                    // If any integrity checks fail during startup, precaching stops will
-                    // stop there, and the SW won't be updated.
-
-                    return { manifest };
-                },
-            ] as any
-        }),
+        })
     ],
 };

@@ -1,8 +1,9 @@
 import * as _ from 'lodash';
 import React from "react";
-import { observable, action } from "mobx";
+import { observable, action, computed } from "mobx";
 import { inject, observer } from "mobx-react";
-import * as HTTPSnippet from "httpsnippet";
+import * as HarFormat from 'har-format';
+import * as HTTPSnippet from "@httptoolkit/httpsnippet";
 import dedent from 'dedent';
 
 import { Omit, HttpExchange } from "../../types";
@@ -12,6 +13,7 @@ import { saveFile } from '../../util/ui';
 import { reportError } from '../../errors';
 
 import { AccountStore } from "../../model/account/account-store";
+import { UiStore } from '../../model/ui-store';
 import { generateHarRequest, generateHar } from "../../model/http/har";
 
 import { ProHeaderPill, CardSalesPitch } from "../account/pro-placeholders";
@@ -58,6 +60,7 @@ const getExportOptionName = (option: SnippetOption) => ({
 interface ExportCardProps extends Omit<ExchangeCardProps, 'children'>  {
     exchange: HttpExchange;
     accountStore?: AccountStore;
+    uiStore?: UiStore;
 }
 
 const SnippetDescriptionContainer = styled.div`
@@ -78,16 +81,34 @@ const snippetEditorOptions = {
     hover: { enabled: false }
 };
 
+const simplifyHarForSnippetExport = (harRequest: HarFormat.Request) => {
+    // When exporting code snippets the primary goal is to generate convenient code to send the
+    // request that's *sematantically* equivalent to the original request, not to force every
+    // tool to produce byte-for-byte identical requests (that's effectively impossible). To do
+    // this, we drop headers that tools can produce automatically for themselves:
+    return {
+        ...harRequest,
+        headers: _.filter(harRequest.headers, (header) => {
+            // All clients should be able to automatically generate the correct content-length
+            // headers as required for a request where it's unspecified. If we override this,
+            // it can cause problems if tools change the body length (due to encoding/compression).
+            if (header.name.toLowerCase() === 'content-length') return false;
+            return true;
+        })
+    };
+};
+
 const ExportSnippetEditor = observer((p: {
     exchange: HttpExchange
     exportOption: SnippetOption
 }) => {
     const { target, client, link, description } = p.exportOption;
     const harRequest = generateHarRequest(p.exchange.request);
+    const harSnippetBase = simplifyHarForSnippetExport(harRequest);
 
     let snippet: string;
     try {
-        snippet = new HTTPSnippet(harRequest).convert(target, client);
+        snippet = new HTTPSnippet(harSnippetBase).convert(target, client);
     } catch (e) {
         console.log(`Failed to export request for ${target}--${client}`);
         reportError(e);
@@ -159,6 +180,7 @@ const ExportHarPill = styled(observer((p: {
 `;
 
 @inject('accountStore')
+@inject('uiStore')
 @observer
 export class ExchangeExportCard extends React.Component<ExportCardProps> {
 
@@ -210,18 +232,22 @@ export class ExchangeExportCard extends React.Component<ExportCardProps> {
         </ExchangeCard>;
     }
 
-    @observable.ref
-    private snippetOption: SnippetOption =
-        _.find(snippetExportOptions['Shell'], { client: 'curl' }) as SnippetOption;
+    @computed
+    private get snippetOption(): SnippetOption {
+        let exportSnippetFormat = this.props.uiStore!.exportSnippetFormat ||
+            `shell${KEY_SEPARATOR}curl`;
 
-    @action.bound
-    setSnippetOption(optionKey: string) {
-        const [target, client] = optionKey.split(KEY_SEPARATOR) as
+        const [target, client] = exportSnippetFormat.split(KEY_SEPARATOR) as
             [HTTPSnippet.Target, HTTPSnippet.Client];
 
-        this.snippetOption = _(snippetExportOptions)
+        return _(snippetExportOptions)
             .values()
             .flatten()
             .find({ target, client }) as SnippetOption;
+    }
+
+    @action.bound
+    setSnippetOption(optionKey: string) {
+        this.props.uiStore!.exportSnippetFormat = optionKey;
     }
 };

@@ -21,6 +21,10 @@ import {
 import { UI_VERSION } from '../../services/service-versions';
 import { isHttpExchange } from './exchange';
 
+// We only include request/response bodies that are under 500KB
+const HAR_BODY_SIZE_LIMIT = 500000;
+const UTF8Decoder = new TextDecoder('utf8', { fatal: true });
+
 export interface Har extends HarFormat.Har {
     log: HarLog;
 }
@@ -28,6 +32,18 @@ export interface Har extends HarFormat.Har {
 interface HarLog extends HarFormat.Log {
     // Custom field to expose failed TLS connections
     _tlsErrors: HarTlsErrorEntry[];
+}
+
+export type RequestContentData = {
+    text: string;
+    size: number;
+    encoding?: 'base64';
+    comment?: string;
+};
+
+interface ExtendedHarRequest extends HarFormat.Request {
+    _postDataDiscarded?: boolean;
+    _content?: RequestContentData;
 }
 
 export type HarEntry = HarFormat.Entry;
@@ -81,31 +97,18 @@ function asHtkHeaders(headers: HarFormat.Header[]) {
         .value() as Headers;
 }
 
-function paramsToEntries(params: URLSearchParams): Array<[string, string]> {
-    // In theory params.entries() should exist, but TS disagrees
-    if ('entries' in params) {
-        return Array.from((params as any).entries());
-    }
-
-    const entries: Array<[string, string]> = [];
-    params.forEach((value, key) => {
-        entries.push([key, value]);
-    });
-    return entries;
-}
-
-// We only include request/response bodies that are under 500KB
-const HAR_BODY_SIZE_LIMIT = 500000;
-
-export function generateHarRequest(request: HtkRequest, waitForDecoding?: false): HarFormat.Request;
+export function generateHarRequest(
+    request: HtkRequest,
+    waitForDecoding?: false
+): ExtendedHarRequest;
 export function generateHarRequest(
     request: HtkRequest,
     waitForDecoding: true
-): HarFormat.Request | ObservablePromise<HarFormat.Request>;
+): ExtendedHarRequest | ObservablePromise<ExtendedHarRequest>;
 export function generateHarRequest(
     request: HtkRequest,
     waitForDecoding = false
-): HarFormat.Request | ObservablePromise<HarFormat.Request> {
+): ExtendedHarRequest | ObservablePromise<ExtendedHarRequest> {
     if (waitForDecoding && (
         !request.body.decodedPromise.state ||
         request.body.decodedPromise.state === 'pending'
@@ -113,30 +116,47 @@ export function generateHarRequest(
         return request.body.decodedPromise.then(() => generateHarRequest(request));
     }
 
-    const bodyText = !!request.body.decoded &&
-        request.body.decoded.byteLength <= HAR_BODY_SIZE_LIMIT &&
-        request.body.decoded.toString('utf8');
-
-    return {
+    const requestEntry: ExtendedHarRequest = {
         method: request.method,
         url: request.parsedUrl.toString(),
         httpVersion: `HTTP/${request.httpVersion || '1.1'}`,
         cookies: [],
         headers: asHarHeaders(request.headers),
-        queryString: paramsToEntries(request.parsedUrl.searchParams).map(
+        queryString: Array.from(request.parsedUrl.searchParams.entries()).map(
             ([paramKey, paramValue]) => ({
                 name: paramKey,
                 value: paramValue
             })
         ),
-        postData: generateHarPostBody(
-            bodyText,
-            lastHeader(request.headers['content-type']) ||
-                'application/octet-stream',
-        ),
         headersSize: -1,
         bodySize: request.body.encoded.byteLength
     };
+
+    if (request.body.decoded) {
+        if (request.body.decoded.byteLength > HAR_BODY_SIZE_LIMIT) {
+            requestEntry._postDataDiscarded = true;
+            requestEntry.comment = `Body discarded during HAR generation: longer than limit of ${HAR_BODY_SIZE_LIMIT} bytes`;
+        } else {
+            try {
+                requestEntry.postData = generateHarPostBody(
+                    UTF8Decoder.decode(request.body.decoded),
+                    lastHeader(request.headers['content-type']) || 'application/octet-stream'
+                );
+            } catch (e) {
+                if (e instanceof TypeError) {
+                    requestEntry._content = {
+                        text: request.body.decoded.toString('base64'),
+                        size: request.body.decoded.byteLength,
+                        encoding: 'base64',
+                    }
+                } else {
+                    throw e;
+                }
+            }
+        }
+    }
+
+    return requestEntry;
 }
 
 type TextBody = {
@@ -197,8 +217,6 @@ function generateHarParamsFromParsedQuery(query: querystring.ParsedUrlQuery): Ha
     }));
 }
 
-const harResponseDecoder = new TextDecoder('utf8', { fatal: true });
-
 async function generateHarResponse(exchange: HttpExchange): Promise<HarFormat.Response> {
     const { request, response } = exchange;
 
@@ -225,7 +243,7 @@ async function generateHarResponse(exchange: HttpExchange): Promise<HarFormat.Re
             responseContent = {};
         } else {
             // If body decodes as text, keep it as text
-            responseContent = { text: harResponseDecoder.decode(decoded) };
+            responseContent = { text: UTF8Decoder.decode(decoded) };
         }
     } catch (e) {
         // If body doesn't decode as text, base64 encode it
@@ -451,10 +469,26 @@ function cleanRawHarData(harContents: any) {
         }
 
         if (entry.response?.content) {
-            // Similarly, when there's no response some fields can be missing. Note that
+            // Similarly, when there's no actual response some fields can be missing. Note that
             // 'content' is response only, but we don't use these fields anyway:
             entry.response.content.size ??= -1;
             entry.response.content.mimeType ??= 'application/octet-stream';
+        }
+
+        if (entry.response && entry.response.bodySize === null) {
+            // Firefox sometimes sets bodySize to null, even when there is clearly a body being received.
+            // Fall back to content-length if available, or use -1 if not.
+            // We do want to use this where it's available so this is a bit annoying, but c'est la vie:
+            // it's not super important data (just used to compare compression perf) and there's no much
+            // we can do when the imported file contains invalid data like this.
+            const contentLengthHeader = _.find(entry.response.headers || [],
+                ({ name }) => name.toLowerCase() === 'content-length'
+            );
+            if (contentLengthHeader) {
+                entry.response.bodySize = parseInt(contentLengthHeader.value, 10);
+            } else {
+                entry.response.bodySize = -1;
+            }
         }
     });
 
@@ -469,7 +503,7 @@ function cleanRawHarData(harContents: any) {
 
 function parseHarRequest(
     id: string,
-    request: HarFormat.Request,
+    request: ExtendedHarRequest,
     timingEvents: TimingEvents
 ): HarRequest {
     const parsedUrl = new URL(request.url);
@@ -488,23 +522,37 @@ function parseHarRequest(
         // legal for an HTTP request):
         headers: asHtkHeaders(request.headers) as Headers & { host: string },
         body: {
-            decoded: parseHarPostData(request.postData),
+            decoded: request._content
+                ? parseHarRequestContents(request._content)
+                : parseHarPostData(request.postData),
             encodedLength: request.bodySize
         }
     }
 }
 
+function parseHarRequestContents(data: RequestContentData): Buffer {
+    if (data.encoding && Buffer.isEncoding(data.encoding)) {
+        return Buffer.from(data.text, data.encoding);
+    }
+
+    throw TypeError("Invalid encoding");
+}
+
 function parseHarPostData(data: HarFormat.PostData | undefined): Buffer {
-    if (!data) return Buffer.from('');
-    else if (data.params) return Buffer.from(
-        // Go from array of key-value objects to object of key -> value array:
-        querystring.stringify(_(data.params)
-            .groupBy(({ name }) => name)
-            .mapValues((params) => params.map(p => p.value || ''))
-            .valueOf()
-        )
-    );
-    else return Buffer.from(data.text, 'utf8');
+    if (!data) {
+        return Buffer.from('');
+    } else if (data.params) {
+        return Buffer.from(
+            // Go from array of key-value objects to object of key -> value array:
+            querystring.stringify(_(data.params)
+                .groupBy(({ name }) => name)
+                .mapValues((params) => params.map(p => p.value || ''))
+                .valueOf()
+            )
+        );
+    } else {
+        return Buffer.from(data.text, 'utf8');
+    }
 }
 
 function parseHarResponse(
@@ -524,7 +572,9 @@ function parseHarResponse(
                 response.content.text || '',
                 response.content.encoding as BufferEncoding || 'utf8'
             ),
-            encodedLength: response.bodySize
+            encodedLength: (!response.bodySize || response.bodySize === -1)
+                ? 0 // If bodySize is missing or inaccessible, just zero it
+                : response.bodySize
         }
     }
 }

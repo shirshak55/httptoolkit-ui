@@ -3,6 +3,7 @@ import * as uuid from 'uuid/v4'
 import { observable } from 'mobx';
 import { Method, matchers, handlers, completionCheckers } from 'mockttp';
 import * as serializr from 'serializr';
+import * as querystring from 'querystring';
 
 import {
     HttpExchange,
@@ -11,7 +12,7 @@ import {
     Headers,
     MockttpSerializedBuffer
 } from '../../types';
-import { byteLength, tryParseJson } from '../../util';
+import { byteLength, isSerializedBuffer, tryParseJson } from '../../util';
 import * as amIUsingHtml from '../../amiusing.html';
 
 import { ProxyStore } from '../proxy-store';
@@ -96,7 +97,13 @@ export class StaticResponseHandler extends handlers.SimpleHandler {
 // Ensure that JSON-ified buffers deserialize as real buffers
 serializr.createModelSchema(StaticResponseHandler, {
     data: serializr.custom(
-        (data) => data,
+        (data: StaticResponseHandler['data']): string | MockttpSerializedBuffer | undefined => {
+            if (!data || typeof data === 'string' || isSerializedBuffer(data)) {
+                return data;
+            } else {
+                return { type: 'Buffer', data: [...data] };
+            }
+        },
         (serializedData: string | MockttpSerializedBuffer | undefined) => {
             if (!serializedData) {
                 return undefined;
@@ -319,9 +326,16 @@ function buildRequestMatchers(request: HtkRequest) {
         ? [new matchers.RawBodyMatcher(request.body.decoded!.toString())]
     : [];
 
+    const urlParts = request.parsedUrl.toString().split('?');
+    const path = urlParts[0];
+    const query = urlParts.slice(1).join('?');
+
     return [
         new (MethodMatchers[request.method as MethodName] || WildcardMatcher)(),
-        new matchers.SimplePathMatcher(request.parsedUrl.toString().split('?')[0]),
+        new matchers.SimplePathMatcher(path),
+        new matchers.QueryMatcher(
+            querystring.parse(query) as ({ [key: string]: string | string[] })
+        ),
         ...bodyMatcher
     ];
 }

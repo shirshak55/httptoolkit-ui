@@ -1,32 +1,28 @@
 import * as _ from 'lodash';
 import * as React from 'react';
-import { action } from 'mobx';
 import { observer } from 'mobx-react';
 
 import { Headers } from '../../types';
-import { styled } from '../../styles';
 import { HEADER_NAME_PATTERN } from '../../model/http/http-docs';
 
-import { clickOnEnter } from '../component-utils';
-import { Button, TextInput } from './inputs';
-import { Icon } from '../../icons';
+import { EditablePairs, Pair, PairsArray } from './editable-pairs';
 
-export type HeadersArray = Array<[string, string]>;
+export type HeadersArray = Array<Pick<Pair, 'key' | 'value'>>;
 
-export const headersToHeadersArray = (headers: Headers): HeadersArray =>
+const headersToHeadersArray = (headers: Headers): HeadersArray =>
     Object.entries(headers || {}).reduce(
-        (acc: Array<[string, string]>, [key, value]) => {
+        (acc: HeadersArray, [key, value]) => {
             if (_.isArray(value)) {
-                acc = acc.concat(value.map(v => [key, v]))
+                acc = acc.concat(value.map(value => ({ key, value })))
             } else {
-                acc.push([key, value || '']);
+                acc.push({ key, value: value || '' });
             }
             return acc;
         }, []
     );
 
-export const headersArrayToHeaders = (headers: HeadersArray): Headers =>
-    headers.reduce((headersObj: { [k: string]: string | string[] }, [key, value]) => {
+const headersArrayToHeaders = (headers: HeadersArray): Headers =>
+    headers.reduce((headersObj: { [k: string]: string | string[] }, { key, value }) => {
         const headerName = key.toLowerCase();
 
         const existingValue = headersObj[headerName];
@@ -40,105 +36,51 @@ export const headersArrayToHeaders = (headers: HeadersArray): Headers =>
         return headersObj;
     }, {});
 
-interface EditableHeadersProps {
-    headers: HeadersArray;
-    onChange: (headers: HeadersArray) => void;
+const withH2HeadersDisabled = (headers: HeadersArray): PairsArray =>
+    headers.map(({ key, value }) =>
+        key.startsWith(':')
+        ? { key, value, disabled: true }
+        : { key, value }
+    );
+
+const normalizeHeaderInput = (headers: PairsArray): HeadersArray =>
+    // Lowercase header keys, and strip any leading colons - HTTP/2 headers should never be entered raw
+    headers.map(({ key, value, disabled }) => ({
+        key: !disabled && key.startsWith(':')
+            ? key.slice(1).toLowerCase()
+            : key.toLowerCase(),
+        value
+    }));
+
+interface EditableHeadersProps<R = Headers> {
+    headers: Headers;
+    onChange: (headers: R) => void;
+    convertResult?: (headers: Headers) => R;
 
     // It's unclear whether you're strictly allowed completely empty header values, but it's definitely
     // not recommended and poorly supported. By default we disable it except for special use cases.
     allowEmptyValues?: boolean;
 }
 
-const HeadersContainer = styled.div`
-    display: grid;
-    grid-gap: 5px;
-    grid-template-columns: 1fr 2fr min-content;
+export const EditableHeaders = observer(<R extends unknown>(props: EditableHeadersProps<R>) => {
+    const { headers, onChange, allowEmptyValues, convertResult } = props;
 
-    > :last-child {
-        grid-column: 2 / span 2;
-    }
-`;
+    return <EditablePairs<R>
+        pairs={withH2HeadersDisabled(headersToHeadersArray(headers))}
+        onChange={onChange}
+        transformInput={normalizeHeaderInput}
+        convertResult={(pairs: PairsArray) =>
+            convertResult
+            ? convertResult(headersArrayToHeaders(pairs))
+            : headersArrayToHeaders(pairs) as unknown as R
+        }
 
+        allowEmptyValues={allowEmptyValues}
 
-const HeaderDeleteButton = styled(Button)`
-    font-size: ${p => p.theme.textSize};
-    padding: 3px 10px 5px;
-`;
+        keyPattern={HEADER_NAME_PATTERN}
+        keyTitle="Header names must contain only alphanumeric characters and !#$%&'*+-.^_`|~ symbols"
 
-export const EditableHeaders = observer((props: EditableHeadersProps) => {
-    const { headers, onChange, allowEmptyValues } = props;
-
-    return <HeadersContainer>
-        { _.flatMap(headers, ([key, value], i) => [
-            <TextInput
-                value={key}
-                required
-                pattern={HEADER_NAME_PATTERN}
-                title={"Header names must contain only alphanumeric characters and !#$%&'*+-.^_`|~ symbols"}
-                disabled={key.startsWith(':')}
-                spellCheck={false}
-                key={`${i}-key`}
-                onChange={action((event: React.ChangeEvent<HTMLInputElement>) => {
-                    event.target.reportValidity();
-
-                    let headerKey = event.target.value;
-
-                    // Drop leading :'s when editing, since they're not allowed
-                    while (headerKey.startsWith(':')) headerKey = headerKey.slice(1);
-
-                    headers[i][0] = headerKey;
-                    onChange(headers);
-                })}
-            />,
-            <TextInput
-                value={value}
-                required={!allowEmptyValues}
-                disabled={key.startsWith(':')}
-                spellCheck={false}
-                key={`${i}-val`}
-                onChange={action((event: React.ChangeEvent<HTMLInputElement>) => {
-                    event.target.reportValidity();
-                    headers[i][1] = event.target.value;
-                    onChange(headers);
-                })}
-            />,
-            <HeaderDeleteButton
-                key={`${i}-del`}
-                disabled={key.startsWith(':')}
-                onClick={action(() => {
-                    headers.splice(i, 1);
-                    onChange(headers);
-                })}
-                onKeyPress={clickOnEnter}
-            >
-                <Icon icon={['far', 'trash-alt']} />
-            </HeaderDeleteButton>
-        ]).concat([
-            <TextInput
-                value=''
-                pattern={HEADER_NAME_PATTERN}
-                placeholder='Header name'
-                spellCheck={false}
-                key={`${headers.length}-key`}
-                onChange={action((event: React.ChangeEvent<HTMLInputElement>) => {
-                    let headerKey = event.target.value;
-
-                    while (headerKey.startsWith(':')) headerKey = headerKey.slice(1);
-
-                    if (headerKey) headers.push([headerKey, '']);
-                    onChange(headers);
-                })}
-            />,
-            <TextInput
-                value=''
-                placeholder='Header value'
-                spellCheck={false}
-                key={`${headers.length}-val`}
-                onChange={action((event: React.ChangeEvent<HTMLInputElement>) => {
-                    headers.push(['', event.target.value]);
-                    onChange(headers);
-                })}
-            />
-        ]) }
-    </HeadersContainer>
+        keyPlaceholder='Header name'
+        valuePlaceholder='Header value'
+    />;
 });

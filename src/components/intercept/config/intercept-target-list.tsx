@@ -7,21 +7,44 @@ import { styled } from '../../../styles';
 import { Icon } from '../../../icons';
 import { Button } from '../../common/inputs';
 
+const SpinnerBlock = styled.div`
+    text-align: center;
+`;
+
+const Spinner = styled(Icon).attrs(() => ({
+    icon: ['fas', 'spinner'],
+    spin: true,
+    size: '2x'
+}))`
+    display: block;
+    margin: 0 auto 10px;
+`;
+
+const ListScrollContainer = styled.div`
+    max-height: 279px;
+    overflow-y: auto;
+    margin: 10px -15px;
+`;
+
 const TargetList = styled.ul`
     display: flex;
     flex-direction: column;
     align-items: stretch;
     justify-content: center;
-    height: 100%;
-    margin: 10px -15px;
-
-    max-height: 279px;
-    overflow-y: auto;
 `;
 
 const Target = styled.li`
     margin-bottom: -10px;
     padding: 10px;
+
+    &:first-child {
+        padding-top: 0;
+    }
+
+    &:last-child {
+        padding-bottom: 0;
+        margin-bottom: 0;
+    }
 `;
 
 const TargetButton = styled(Button)<{
@@ -65,37 +88,47 @@ type TargetItem<Id> = {
 
 @observer
 export class InterceptionTargetList<Id extends string | number> extends React.Component<{
-    targets: TargetItem<Id>[]
+    targetName: string,
+    targets: TargetItem<Id>[],
     interceptTarget: (id: Id) => void,
     ellipseDirection: 'left' | 'right'
 }> {
 
     render() {
-        const { targets, interceptTarget, ellipseDirection } = this.props;
+        const { targetName, targets, interceptTarget, ellipseDirection } = this.props;
 
-        return <TargetList>
-            { _.map(targets, (target: TargetItem<Id>) => <Target key={target.id}>
-                <TargetButton
-                    title={target.title}
-                    state={target.status}
-                    disabled={target.status !== 'available'}
-                    onClick={target.status === 'available'
-                        ? () => interceptTarget(target.id)
-                        : _.noop
-                    }
-                >
-                    {
-                        target.status === 'activating'
-                            ? <TargetIcon icon={['fas', 'spinner']} spin />
-                        : target.status === 'active'
-                            ? <TargetIcon icon={['fas', 'check']} />
-                        : null
-                    }
-                    <TargetText ellipseDirection={ellipseDirection}>
-                        { target.content }
-                    </TargetText>
-                </TargetButton>
-            </Target>) }
-        </TargetList>;
+        if (targets.length === 0) {
+            return <SpinnerBlock>
+                <Spinner />
+                Looking for running { targetName } to intercept...
+            </SpinnerBlock>
+        }
+
+        return <ListScrollContainer>
+            <TargetList>
+                { _.map(targets, (target: TargetItem<Id>) => <Target key={target.id}>
+                    <TargetButton
+                        title={target.title}
+                        state={target.status}
+                        disabled={target.status !== 'available'}
+                        onClick={target.status === 'available'
+                            ? () => interceptTarget(target.id)
+                            : _.noop
+                        }
+                    >
+                        {
+                            target.status === 'activating'
+                                ? <TargetIcon icon={['fas', 'spinner']} spin />
+                            : target.status === 'active'
+                                ? <TargetIcon icon={['fas', 'check']} />
+                            : null
+                        }
+                        <TargetText ellipseDirection={ellipseDirection}>
+                            { target.content }
+                        </TargetText>
+                    </TargetButton>
+                </Target>) }
+            </TargetList>
+        </ListScrollContainer>;
     }
 }

@@ -14,7 +14,7 @@ import { ExchangeHeaderCard } from './exchange-card';
 const HeaderExplanation = styled.p`
     width: 100%;
     margin-bottom: 10px;
-    line-height: 1.2;
+    line-height: 1.3;
 
     a[href] {
         color: ${p => p.theme.linkColor};
@@ -298,6 +298,14 @@ export const ExchangeErrorHeader = (p: {
                     that don't exist or aren't accessible.
                 </HeaderExplanation>
             </>
+        : p.type === 'untrusted'
+            ? <HeaderExplanation>
+                By default unrecognized certificate authorities (CAs) are only accepted for localhost servers, but {
+                    p.isPaidUser
+                        ? 'additional CAs can be trusted from the Settings page.'
+                        : 'Pro users can trust additional CAs or disable HTTPS validation for a host entirely.'
+                }
+            </HeaderExplanation>
         : isWhitelistable(p.type)
             ? <HeaderExplanation>
                 By default this is only allowed for localhost servers, but {

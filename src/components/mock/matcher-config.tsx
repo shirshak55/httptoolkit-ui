@@ -6,18 +6,15 @@ import * as Randexp from 'randexp';
 
 import { matchers } from "mockttp";
 
+import { Headers } from '../../types';
 import { css, styled } from '../../styles';
 import { tryParseJson } from '../../util';
 
 import { Matcher, MatcherClass, MatcherLookup, MatcherClassKey } from "../../model/rules/rules";
 
 import { TextInput } from '../common/inputs';
-import {
-    EditableHeaders,
-    HeadersArray,
-    headersArrayToHeaders,
-    headersToHeadersArray
-} from '../common/editable-headers';
+import { EditablePairs, PairsArray } from '../common/editable-pairs';
+import { EditableHeaders } from '../common/editable-headers';
 import { ThemedSelfSizedEditor } from '../editor/base-editor';
 
 type MatcherConfigProps<M extends Matcher> = {
@@ -57,6 +54,8 @@ export function MatcherConfiguration(props:
             return <SimplePathMatcherConfig {...configProps} />;
         case matchers.RegexPathMatcher:
             return <RegexPathMatcherConfig {...configProps} />;
+        case matchers.QueryMatcher:
+            return <QueryMatcherConfig {...configProps} />;
         case matchers.ExactQueryMatcher:
             return <ExactQueryMatcherConfig {...configProps} />;
         case matchers.HeaderMatcher:
@@ -367,6 +366,70 @@ class RegexPathMatcherConfig extends MatcherConfig<matchers.RegexPathMatcher> {
     }
 }
 
+type QueryObject = { [key: string]: string | string[] };
+
+const queryObjectToPairsArray = (query: QueryObject): PairsArray =>
+    _.flatMap(Object.entries(query), ([key, value]) => {
+        if (_.isArray(value)) {
+            return value.map((v) => ({ key, value: v }));
+        } else {
+            return { key, value };
+        }
+    });
+
+const pairsArrayToQueryObject = (queryPairs: PairsArray): QueryObject =>
+    _.mapValues(
+        _.groupBy(queryPairs, ({ key }) => key),
+        (pairs) =>
+            pairs.length === 1
+            ? pairs[0].value // Work around a Mockttp bug: 1-element arrays don't match single values
+            : pairs.map(p => p.value)
+    );
+
+@observer
+class QueryMatcherConfig extends MatcherConfig<matchers.QueryMatcher> {
+
+    render() {
+        const { matcherIndex, matcher } = this.props;
+
+        const queryParams = queryObjectToPairsArray(matcher?.queryObject || {});
+
+        return <MatcherConfigContainer>
+            { matcherIndex !== undefined &&
+                <ConfigLabel>
+                    { matcherIndex !== 0 && 'and ' } with query parameters including
+                </ConfigLabel>
+            }
+            <EditablePairs
+                pairs={queryParams}
+                convertResult={pairsArrayToQueryObject}
+                onChange={this.onChange}
+                keyPlaceholder='Query parameter name'
+                valuePlaceholder='Query parameter value'
+                allowEmptyValues={true}
+            />
+        </MatcherConfigContainer>;
+    }
+
+    @action.bound
+    onChange(queryParams: QueryObject) {
+        try {
+            if (Object.keys(queryParams).some(key => !key)) {
+                throw new Error("Invalid query parameter; query parameter names can't be empty");
+            }
+
+            if (Object.keys(queryParams).length === 0) {
+                this.props.onChange();
+            } else {
+                this.props.onChange(new matchers.QueryMatcher(queryParams));
+            }
+        } catch (e) {
+            console.log(e);
+            this.props.onInvalidState();
+        }
+    }
+}
+
 @observer
 class ExactQueryMatcherConfig extends MatcherConfig<matchers.ExactQueryMatcher> {
 
@@ -425,30 +488,30 @@ class ExactQueryMatcherConfig extends MatcherConfig<matchers.ExactQueryMatcher> 
     }
 }
 
-const headersArrayToFlatHeaders = (headers: HeadersArray) =>
+type FlatHeaders = { [key: string]: string };
+
+const headersToFlatHeaders = (headers: Headers): FlatHeaders =>
     _.mapValues(
-        headersArrayToHeaders(
-            headers.filter(([k, v]) => k && v)
-        ),
+        _.pickBy(headers, (key, value) => key && value),
         (value) =>
             _.isArray(value)
                 ? value.join(', ')
                 : value! // We know this is set because of filter above
-    )
+    );
 
 
 @observer
 class HeaderMatcherConfig extends MatcherConfig<matchers.HeaderMatcher> {
 
     @observable
-    private headers: HeadersArray = [];
+    private headers: Headers = {};
 
     componentDidMount() {
         disposeOnUnmount(this, reaction(
             () => this.props.matcher ? this.props.matcher.headers : {},
             (headers) => {
-                if (!_.isEqual(headers, headersArrayToFlatHeaders(this.headers))) {
-                    this.headers = headersToHeadersArray(headers);
+                if (!_.isEqual(headers, headersToFlatHeaders(this.headers))) {
+                    this.headers = headers;
                 }
             },
             { fireImmediately: true }
@@ -472,22 +535,25 @@ class HeaderMatcherConfig extends MatcherConfig<matchers.HeaderMatcher> {
     }
 
     @action.bound
-    onChange(headers: HeadersArray) {
+    onChange(headers: Headers) {
         this.headers = headers;
 
         try {
-            if (_.some(headers, ([_name, value]) => !value)) {
+            if (Object.values(headers).some(value => !value)) {
                 throw new Error("Invalid headers; header values can't be empty");
             }
-            if (_.some(headers, ([name]) => !name)) {
+            if (Object.keys(headers).some(key => !key)) {
                 throw new Error("Invalid headers; header names can't be empty");
             }
 
-            if (headers.length === 0) {
+            if (Object.keys(headers).length === 0) {
                 this.props.onChange();
             } else {
                 this.props.onChange(new matchers.HeaderMatcher(
-                    headersArrayToFlatHeaders(this.headers)
+                    // We convert here rather than using convertResult on EditableHeaders to ensure we
+                    // preserve & nicely handle invalid input (like missing header values) that would
+                    // is lost during flatHeader conversion.
+                    headersToFlatHeaders(this.headers)
                 ));
             }
         } catch (e) {

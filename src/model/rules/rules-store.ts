@@ -1,6 +1,13 @@
 import * as _ from 'lodash';
 
-import { completionCheckers, webSocketHandlers, ProxyConfig, requestHandlers } from 'mockttp';
+import {
+    completionCheckers,
+    requestHandlers,
+    webSocketHandlers,
+    MOCKTTP_PARAM_REF,
+    ProxyConfig,
+    ProxySetting
+} from 'mockttp';
 
 import {
     observable,
@@ -62,6 +69,7 @@ import {
     DeserializationArgs
 } from './rule-serialization';
 import { migrateRuleData } from './rule-migrations';
+import { ParsedCertificate } from '../crypto';
 
 export type ClientCertificate = {
     readonly pfx: ArrayBuffer,
@@ -79,12 +87,18 @@ const reloadRules = (ruleRoot: HtkMockRuleRoot, rulesStore: RulesStore) => {
     return deserializeRules(serializeRules(ruleRoot), { rulesStore });
 };
 
+const dockerProxyRuleParamName = (port: number) =>
+    `docker-tunnel-proxy-${port}`;
+
 export type UpstreamProxyType =
     | 'system'
     | 'direct'
     | 'http'
     | 'https'
-    | 'socks';
+    | 'socks4'
+    | 'socks4a'
+    | 'socks5'
+    | 'socks5h';
 
 export class RulesStore {
 
@@ -198,7 +212,14 @@ export class RulesStore {
                 }),
                 customArgs: { rulesStore: this } as DeserializationArgs
             });
-            this.resetRuleDrafts(); // Drafts aren't persisted, so need updating to match loaded data.
+
+            if (!this.rules) {
+                // If rules are somehow undefined (not sure, but seems it can happen, maybe odd data?) reset them:
+                this.resetRulesToDefault();
+            } else {
+                // Drafts are never persisted, so always need resetting to match the just-loaded data:
+                this.resetRuleDrafts();
+            }
         } else {
             // For free users, reset rules to default (separately, so defaults can use settings loaded above)
             this.resetRulesToDefault();
@@ -211,6 +232,13 @@ export class RulesStore {
             const forwardingRule = buildForwardingRuleIntegration(sourceHost, targetHost, this);
             this.ensureRuleExists(forwardingRule);
         }));
+
+        if ((this.upstreamProxyType as string) === 'socks') {
+            runInAction(() => {
+                // Backward compat from when we only supported generic 'socks' proxies, not individual types.
+                this.upstreamProxyType = 'socks5h';
+            });
+        }
 
         // Every time the user account data is updated from the server, consider resetting
         // paid settings to the free defaults. This ensures that they're reset on
@@ -235,6 +263,7 @@ export class RulesStore {
     get activePassthroughOptions(): requestHandlers.PassThroughHandlerOptions {
         return _.cloneDeep({ // Clone to ensure we touch & subscribe to everything here
             ignoreHostCertificateErrors: this.whitelistedCertificateHosts,
+            trustAdditionalCAs: this.additionalCaCertificates.map((cert) => ({ cert: cert.rawPEM })),
             clientCertificateHostMap: _.mapValues(this.clientCertificateHostMap, (cert) => ({
                 pfx: Buffer.from(cert.pfx),
                 passphrase: cert.passphrase
@@ -256,7 +285,7 @@ export class RulesStore {
     upstreamNoProxyHosts: string[] = [];
 
     @computed
-    get effectiveSystemProxyConfig(): ProxyConfig | 'ignored' | 'unparseable' | undefined {
+    get effectiveSystemProxyConfig(): ProxySetting | 'ignored' | 'unparseable' | undefined {
         const { systemProxyConfig } = this.proxyStore;
 
         if (!systemProxyConfig) return undefined;
@@ -279,7 +308,7 @@ export class RulesStore {
     }
 
     @computed.struct
-    get proxyConfig(): ProxyConfig | undefined {
+    get userProxyConfig(): ProxySetting | undefined {
         if (this.upstreamProxyType === 'direct') {
             return undefined;
         } else if (this.upstreamProxyType === 'system') {
@@ -295,6 +324,22 @@ export class RulesStore {
         }
     }
 
+    @computed.struct
+    get proxyConfig(): ProxyConfig {
+        const { userProxyConfig } = this;
+        const serverPort = this.proxyStore.serverPort;
+
+        if (this.proxyStore.ruleParameterKeys.includes(dockerProxyRuleParamName(serverPort))) {
+            const dockerProxyConfig = { [MOCKTTP_PARAM_REF]: dockerProxyRuleParamName(serverPort) };
+
+            return userProxyConfig
+                ? [dockerProxyConfig, userProxyConfig]
+                : dockerProxyConfig;
+        } else {
+            return userProxyConfig;
+        }
+    }
+
     // The currently active list
     @persist('list') @observable
     whitelistedCertificateHosts: string[] = ['localhost'];
@@ -303,11 +348,15 @@ export class RulesStore {
     @persist('map', clientCertificateSchema) @observable
     clientCertificateHostMap: { [host: string]: ClientCertificate } = {};
 
+    // The currently active additional CA certificates
+    @persist('list') @observable
+    additionalCaCertificates: Array<ParsedCertificate> = [];
+
     @persist('object', MockRulesetSchema) @observable
-    rules: HtkMockRuleRoot = buildDefaultRules(this, this.proxyStore);
+    rules!: HtkMockRuleRoot;
 
     @observable
-    draftRules: HtkMockRuleRoot = _.cloneDeep(this.rules);
+    draftRules!: HtkMockRuleRoot;
 
     @action.bound
     saveRules() {

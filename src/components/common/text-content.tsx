@@ -12,6 +12,7 @@ export const ContentLabel = styled.h2`
     opacity: ${p => p.theme.lowlightTextOpacity};
 
     display: inline-block;
+    margin-right: 5px;
 `;
 
 export const ContentValue = styled.div`
@@ -20,7 +21,7 @@ export const ContentValue = styled.div`
 
 export const ContentLabelBlock = styled(ContentLabel)`
     padding: 3px 0 0;
-    margin-bottom: 5px;
+    margin: 0 0 5px 0;
     min-height: 26px;
     display: block;
     box-sizing: border-box;
@@ -36,6 +37,7 @@ export const ContentMonoValue = styled.div`
 
     font-family: ${p => p.theme.monoFontFamily};
     word-break: break-all;
+    line-height: 1.1;
 `;
 
 export const CopyableMonoValue = styled.span`
@@ -58,7 +60,7 @@ export const ExternalContent = (p:  React.HTMLAttributes<HTMLDivElement> & {
 
 // Format blocks of readable text/docs/etc.
 export const Content = styled.div`
-    line-height: 1.2;
+    line-height: 1.3;
 
     p, li, ul, ol, table, h1, h2, h3, h4, h5, h6, pre {
         margin-bottom: 10px;

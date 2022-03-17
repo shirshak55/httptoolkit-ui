@@ -33,6 +33,7 @@ interface InterceptorConfig {
     }) => boolean;
     uiConfig?: InterceptorCustomUiConfig;
     getActivationOptions?: (options: { accountStore: AccountStore }) => unknown;
+    notAvailableHelpUrl?: string;
 }
 
 export type Interceptor =
@@ -46,7 +47,7 @@ const MOBILE_TAGS = ['mobile', 'phone', 'app'];
 const ANDROID_TAGS = ['samsung', 'galaxy', 'nokia', 'lg', 'android', 'google', 'motorola', ...JVM_TAGS];
 const IOS_TAGS = ['apple', 'ios', 'iphone', 'ipad'];
 const DOCKER_TAGS = ['bridge', 'services', 'images'];
-const TERMINAL_TAGS = ['command line', 'cli', 'bash', 'cmd', 'shell', 'php', 'ruby', 'node', 'js', ...JVM_TAGS];
+const TERMINAL_TAGS = ['command line', 'cli', 'docker', 'bash', 'cmd', 'shell', 'php', 'ruby', 'node', 'js', ...JVM_TAGS];
 
 const androidInterceptIconProps = _.assign({
     style: { transform: 'translateY(32px)' }
@@ -182,7 +183,7 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
     },
     'fresh-terminal': {
         name: 'Fresh Terminal',
-        description: ["Open a new terminal preconfigured to intercept all launched processes"],
+        description: ["Open a new terminal that intercepts all processes & Docker containers"],
         iconProps: SourceIcons.Terminal,
         tags: TERMINAL_TAGS,
         getActivationOptions: ({ accountStore }) =>
@@ -192,17 +193,18 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
     },
     'existing-terminal': {
         name: 'Existing Terminal',
-        description: ["Intercept all launched processes from one of your existing terminal windows"],
+        description: ["Intercept all launched processes & Docker containers from an existing terminal window"],
         iconProps: recoloured(SourceIcons.Terminal, '#dd44dd'),
         uiConfig: ExistingTerminalCustomUi,
         tags: TERMINAL_TAGS
     },
     'android-adb': {
-        name: 'Android device connected via ADB',
+        name: 'Android device via ADB',
         description: [
             'Intercept an Android device or emulator connected to ADB',
             'Automatically injects system HTTPS certificates into rooted devices & most emulators'
         ],
+        notAvailableHelpUrl: 'https://httptoolkit.tech/docs/guides/android/#android-device-via-adb-interception-option-is-not-available',
         iconProps: androidInterceptIconProps,
         checkRequirements: ({ serverVersion }) => {
             return versionSatisfies(serverVersion || '', DETAILED_CONFIG_RANGE);

@@ -46,7 +46,8 @@ const ParametersGrid = styled.section`
 const ParameterKeyValue = styled(ExchangeCollapsibleSummary)`
     word-break: break-all; /* Fallback for anybody without break-word */
     word-break: break-word;
-    font-family: 'Fira Mono', monospace;
+    font-family: ${p => p.theme.monoFontFamily};
+    line-height: 1.1;
 `;
 
 const ParamName = styled.span`
@@ -88,7 +89,6 @@ const ParamMetadata = styled((p: {
                 : ''
         }.
 </div>)`
-    line-height: 1.2;
     font-style: italic;
 `;
 

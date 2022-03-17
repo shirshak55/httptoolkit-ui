@@ -29,6 +29,7 @@ const HeaderKeyValue = styled(ExchangeCollapsibleSummary)`
     word-break: break-all; /* Fallback for anybody without break-word */
     word-break: break-word;
     font-family: ${p => p.theme.monoFontFamily};
+    line-height: 1.1;
 `;
 
 const HeaderName = styled.span`
@@ -36,7 +37,7 @@ const HeaderName = styled.span`
 `;
 
 const HeaderDescriptionContainer = styled(ExchangeCollapsibleBody)`
-    line-height: 1.2;
+    line-height: 1.3;
 `;
 
 const HeaderDocsLink = styled(DocsLink)`
